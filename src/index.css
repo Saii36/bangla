@@ -1,14 +1,22 @@
 @import "tailwindcss";
 @custom-variant dark (&:where(.dark, .dark *));
 
+@font-face {
+  font-family: "Lohit Bengali Local";
+  src: url("/fonts/Lohit-Bengali.ttf") format("truetype");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 @layer base {
   :root {
-    --font-sans: "Plus Jakarta Sans", "Hind Siliguri", "Noto Sans Bengali", "Ubuntu", system-ui, -apple-system, sans-serif;
+    --font-sans: "Plus Jakarta Sans", "Ubuntu", "Cantarell", "Noto Sans", "Hind Siliguri", "Noto Sans Bengali", "Lohit Bengali Local", system-ui, -apple-system, sans-serif;
     --font-mono: "JetBrains Mono", "Ubuntu Mono", "DejaVu Sans Mono", ui-monospace, SFMono-Regular, monospace;
-    --font-bangla-siliguri: "Hind Siliguri", "Noto Sans Bengali", "Kalpurush", "SolaimanLipi", "Siyam Rupali", "Lohit Bengali", "Mukti Narrow", "Vrinda", sans-serif;
-    --font-bangla-sans: "Noto Sans Bengali", "Lohit Bengali", "Hind Siliguri", "Kalpurush", "Mukti Narrow", sans-serif;
-    --font-bangla-serif: "Noto Serif Bengali", "Tiro Bangla", "SolaimanLipi", "Kalpurush", serif;
-    --font-bangla-tiro: "Tiro Bangla", "Noto Serif Bengali", "Siyam Rupali", "Kalpurush", serif;
+    --font-bangla-siliguri: "Hind Siliguri", "Noto Sans Bengali", "Kalpurush", "SolaimanLipi", "Siyam Rupali", "Lohit Bengali", "Lohit Bengali Local", "Mukti Narrow", "Vrinda", sans-serif;
+    --font-bangla-sans: "Noto Sans Bengali", "Lohit Bengali", "Lohit Bengali Local", "Hind Siliguri", "Kalpurush", "Mukti Narrow", sans-serif;
+    --font-bangla-serif: "Noto Serif Bengali", "Tiro Bangla", "SolaimanLipi", "Kalpurush", "Lohit Bengali Local", serif;
+    --font-bangla-tiro: "Tiro Bangla", "Noto Serif Bengali", "Siyam Rupali", "Kalpurush", "Lohit Bengali Local", serif;
   }
 
   html {

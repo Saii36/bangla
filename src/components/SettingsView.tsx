@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Download,
   Upload,
@@ -13,7 +13,20 @@ import {
   XCircle,
   Play,
   Cpu,
+  HardDrive,
+  FolderCheck,
+  Layers,
 } from 'lucide-react';
+import {
+  createNativeBackup,
+  DesktopBackupFileInfo,
+  DesktopRuntimeInfo,
+  getDesktopRuntimeInfo,
+  installCinnamonDesktopLauncher,
+  isTauriDesktop,
+  listNativeBackups,
+  readNativeBackup,
+} from '../core/desktopBridge';
 import { computeStorageDiagnostics } from '../core/indexedDb';
 import { getAllLayouts } from '../core/layouts/registry';
 import {
@@ -39,7 +52,7 @@ import type {
 interface SettingsViewProps {
   data: AppStorageData;
   onUpdateSetting: <K extends keyof UserSettings>(key: K, value: UserSettings[K]) => void;
-  onRestoreBackup: (nextData: AppStorageData) => void;
+  onRestoreBackup: (nextData: AppStorageData, mode: 'merge' | 'replace') => void;
   onResetProgress: () => void;
   onOpenPopupPreview: () => void;
 }
@@ -54,11 +67,28 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const { settings } = data;
   const allLayouts = useMemo(() => getAllLayouts(), []);
   const diagnostics = useMemo(() => computeStorageDiagnostics(data), [data]);
+  const inDesktop = isTauriDesktop();
   const fileRef = useRef<HTMLInputElement>(null);
+  const importModeRef = useRef<'merge' | 'replace'>('merge');
   const [notice, setNotice] = useState<string | null>(null);
   const [confirmReset, setConfirmReset] = useState(false);
   const [verifyReport, setVerifyReport] = useState<OfflineVerificationReport | null>(null);
   const [verifying, setVerifying] = useState(false);
+  const [desktopInfo, setDesktopInfo] = useState<DesktopRuntimeInfo | null>(null);
+  const [localBackups, setLocalBackups] = useState<DesktopBackupFileInfo[]>([]);
+  const [createDesktopShortcut, setCreateDesktopShortcut] = useState(true);
+  const [installingLauncher, setInstallingLauncher] = useState(false);
+
+  const refreshDesktopDiagnostics = async () => {
+    if (!inDesktop) return;
+    const [info, backups] = await Promise.all([getDesktopRuntimeInfo(), listNativeBackups()]);
+    setDesktopInfo(info);
+    setLocalBackups(backups);
+  };
+
+  useEffect(() => {
+    refreshDesktopDiagnostics();
+  }, [data.sessions.length, data.customLessons.length]);
 
   const handleRunOfflineVerification = async () => {
     setVerifying(true);
@@ -70,11 +100,73 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }
   };
 
-  const handleExportBackup = () => {
+  const handleExportBackup = async () => {
     const json = exportFullBackupJson(data);
     const stamp = new Date().toISOString().slice(0, 10);
+    if (inDesktop) {
+      try {
+        const saved = await createNativeBackup(json);
+        await refreshDesktopDiagnostics();
+        if (saved) {
+          setNotice(`Saved verified snapshot to ${saved.fullPath}`);
+        }
+      } catch {
+        // Still allow browser download fallback below
+      }
+    }
     downloadTextFile(`bangla-typing-master-backup-${stamp}.json`, json, 'application/json');
-    setNotice('Exported full local backup (settings, lessons, custom sets, and progress).');
+    if (!inDesktop) {
+      setNotice('Exported full local backup (settings, lessons, custom sets, and progress).');
+    }
+  };
+
+  const handleSaveDesktopSnapshotOnly = async () => {
+    try {
+      const json = exportFullBackupJson(data);
+      const saved = await createNativeBackup(json);
+      await refreshDesktopDiagnostics();
+      if (saved) {
+        setNotice(`Snapshot written safely to ${saved.fullPath}`);
+      }
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : 'Failed to create local snapshot.');
+    }
+  };
+
+  const handleRestoreSnapshot = async (filename: string, mode: 'merge' | 'replace') => {
+    try {
+      const raw = await readNativeBackup(filename);
+      const parsed = parseBackupJson(raw);
+      onRestoreBackup(parsed, mode);
+      setNotice(
+        mode === 'merge'
+          ? `Merged snapshot ${filename} safely without discarding existing records.`
+          : `Restored snapshot ${filename} (${parsed.sessions.length} sessions loaded).`
+      );
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : 'Failed to restore local snapshot.');
+    }
+  };
+
+  const handleInstallCinnamonLauncher = async () => {
+    setInstallingLauncher(true);
+    try {
+      const res = await installCinnamonDesktopLauncher(createDesktopShortcut);
+      setNotice(
+        `Cinnamon launcher installed at ${res.menuEntryPath}${
+          res.desktopShortcutPath ? ` and ${res.desktopShortcutPath}` : ''
+        }.`
+      );
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : 'Failed to install Cinnamon launcher.');
+    } finally {
+      setInstallingLauncher(false);
+    }
+  };
+
+  const triggerBackupImport = (mode: 'merge' | 'replace') => {
+    importModeRef.current = mode;
+    fileRef.current?.click();
   };
 
   const handleImportBackup = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -84,8 +176,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     reader.onload = () => {
       try {
         const parsed = parseBackupJson(String(reader.result || ''));
-        onRestoreBackup(parsed);
-        setNotice(`Restored backup successfully (${parsed.sessions.length} sessions loaded).`);
+        const mode = importModeRef.current;
+        onRestoreBackup(parsed, mode);
+        setNotice(
+          mode === 'merge'
+            ? `Safely merged backup (${parsed.sessions.length} sessions & ${parsed.customLessons.length} custom lessons combined with existing data).`
+            : `Replaced local dataset from backup (${parsed.sessions.length} sessions loaded).`
+        );
       } catch (err) {
         setNotice(err instanceof Error ? err.message : 'Failed to import backup JSON.');
       }
@@ -375,33 +472,49 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
       </section>
 
-      {/* Firefox WebExtension, IndexedDB Storage & Privacy Backup */}
+      {/* Persistent Storage, Desktop Integration & Safe Backups */}
       <section className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#121A26] p-6 space-y-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-2">
               <ShieldCheck className="w-4 h-4 text-teal-600 dark:text-teal-400" />
-              Firefox Extension, IndexedDB Offline Storage &amp; Backups
+              {inDesktop
+                ? 'Linux Desktop Persistent Storage & Safe Backups'
+                : 'Offline Storage, Firefox Migration & Linux Desktop'}
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-              Manifest V3 · Primary DB:{' '}
-              <strong className="text-slate-800 dark:text-slate-200">
-                {diagnostics.engine} ({diagnostics.dbName})
-              </strong>
-              {isRunningInExtension() ? ' + Firefox browser.storage.local sync' : ''} · Zero cloud sync or telemetry.
+              {inDesktop ? (
+                <>
+                  Native Tauri 2 ({desktopInfo?.packageFormat ?? 'Linux Desktop'}) · Persistent XDG File +{' '}
+                  <strong className="text-slate-800 dark:text-slate-200">
+                    {diagnostics.engine} ({diagnostics.dbName})
+                  </strong>{' '}
+                  · Zero cloud sync or telemetry.
+                </>
+              ) : (
+                <>
+                  Primary DB:{' '}
+                  <strong className="text-slate-800 dark:text-slate-200">
+                    {diagnostics.engine} ({diagnostics.dbName})
+                  </strong>
+                  {isRunningInExtension() ? ' + Firefox browser.storage.local sync' : ''} · Zero cloud sync or telemetry.
+                </>
+              )}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={onOpenPopupPreview}
-            className="inline-flex items-center gap-1.5 h-9 px-3.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 whitespace-nowrap shrink-0"
-          >
-            <PanelTop className="w-4 h-4" />
-            Preview Firefox Popup
-          </button>
+          {!inDesktop && (
+            <button
+              type="button"
+              onClick={onOpenPopupPreview}
+              className="inline-flex items-center gap-1.5 h-9 px-3.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 whitespace-nowrap shrink-0"
+            >
+              <PanelTop className="w-4 h-4" />
+              Preview Firefox Popup
+            </button>
+          )}
         </div>
 
-        {/* IndexedDB Diagnostics Grid */}
+        {/* Storage Diagnostics Grid */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
           <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/60 p-3">
             <p className="text-slate-500 dark:text-slate-400 flex items-center gap-1">
@@ -432,20 +545,93 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         </div>
 
-        <div className="rounded-lg bg-slate-50 dark:bg-slate-900/60 border border-slate-200/80 dark:border-slate-800 p-4 text-xs text-slate-600 dark:text-slate-300 space-y-1.5 leading-relaxed">
-          <p className="font-semibold text-slate-800 dark:text-slate-100">
-            Installing in Firefox (Manifest V3) &amp; Linux Desktop Architecture
-          </p>
-          <p>
-            1. Build the extension with <code className="font-mono-tabular">npm run build</code> to generate the self-contained <code className="font-mono-tabular">dist/</code> bundle (<code className="font-mono-tabular">manifest.json</code>, <code className="font-mono-tabular">popup.html</code>, <code className="font-mono-tabular">background.js</code>, <code className="font-mono-tabular">index.html</code>).
-          </p>
-          <p>
-            2. Open <code className="font-mono-tabular">about:debugging#/runtime/this-firefox</code> in Firefox, click <strong>Load Temporary Add-on</strong>, and select <code className="font-mono-tabular">dist/manifest.json</code>.
-          </p>
-          <p>
-            3. All core engines (Unicode, Avro, Fixed Layouts, Heatmap, Finger Analytics, IndexedDB) live in platform-independent TypeScript modules ready to wrap inside <strong>Tauri</strong> for native Linux <strong>AppImage</strong> and <strong>.deb</strong> packaging.
-          </p>
-        </div>
+        {/* Native Linux Desktop XDG Data Directory & Cinnamon Launcher Controls */}
+        {inDesktop && desktopInfo && (
+          <div className="rounded-xl border border-teal-200/80 dark:border-teal-900/70 bg-teal-50/40 dark:bg-teal-950/20 p-4 space-y-3 text-xs">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
+                <HardDrive className="w-4 h-4 text-teal-700 dark:text-teal-400" />
+                Persistent Linux Data Directory ({desktopInfo.os}/{desktopInfo.arch} · {desktopInfo.packageFormat})
+              </p>
+              <span className="font-mono-tabular text-slate-600 dark:text-slate-400">
+                {desktopInfo.storage.backupCount} local snapshot(s)
+              </span>
+            </div>
+            <div className="space-y-1 text-slate-600 dark:text-slate-300 font-mono-tabular break-all">
+              <p>Data file: {desktopInfo.storage.dataFile}</p>
+              <p>Backups: {desktopInfo.storage.backupsDir}</p>
+            </div>
+
+            <div className="pt-2 border-t border-teal-200/60 dark:border-teal-900/50 flex flex-wrap items-center justify-between gap-3">
+              <label className="inline-flex items-center gap-2 text-slate-700 dark:text-slate-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={createDesktopShortcut}
+                  onChange={(e) => setCreateDesktopShortcut(e.target.checked)}
+                  className="w-4 h-4 accent-teal-600"
+                />
+                Also add launcher icon to Desktop
+              </label>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleSaveDesktopSnapshotOnly}
+                  className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-teal-300 dark:border-teal-800 text-teal-800 dark:text-teal-200 hover:bg-teal-100/60 dark:hover:bg-teal-900/40 font-medium whitespace-nowrap shrink-0"
+                >
+                  <FolderCheck className="w-3.5 h-3.5" />
+                  Save Local Snapshot
+                </button>
+                <button
+                  type="button"
+                  disabled={installingLauncher}
+                  onClick={handleInstallCinnamonLauncher}
+                  className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg bg-teal-700 hover:bg-teal-800 dark:bg-teal-600 dark:hover:bg-teal-500 text-white font-semibold disabled:opacity-50 whitespace-nowrap shrink-0"
+                >
+                  <Layers className="w-3.5 h-3.5" />
+                  {installingLauncher ? 'Installing...' : 'Add to Cinnamon Menu'}
+                </button>
+              </div>
+            </div>
+
+            {localBackups.length > 0 && (
+              <div className="pt-2 border-t border-teal-200/60 dark:border-teal-900/50 space-y-1.5">
+                <p className="font-semibold text-slate-800 dark:text-slate-200">
+                  Recent Automatic &amp; Manual Snapshots
+                </p>
+                <div className="max-h-32 overflow-y-auto divide-y divide-slate-200/60 dark:divide-slate-800">
+                  {localBackups.slice(0, 6).map((b) => (
+                    <div key={b.filename} className="py-1.5 flex items-center justify-between gap-2">
+                      <span className="font-mono-tabular text-slate-700 dark:text-slate-300 truncate">
+                        {b.filename} ({(b.sizeBytes / 1024).toFixed(1)} KB)
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleRestoreSnapshot(b.filename, 'merge')}
+                        className="text-teal-700 dark:text-teal-300 hover:underline font-medium whitespace-nowrap shrink-0"
+                      >
+                        Merge Restore
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {!inDesktop && (
+          <div className="rounded-lg bg-slate-50 dark:bg-slate-900/60 border border-slate-200/80 dark:border-slate-800 p-4 text-xs text-slate-600 dark:text-slate-300 space-y-1.5 leading-relaxed">
+            <p className="font-semibold text-slate-800 dark:text-slate-100">
+              Migrating Between Firefox &amp; Linux Mint Desktop Application
+            </p>
+            <p>
+              1. Click <strong>Export Full Backup (JSON)</strong> here in Firefox to save all your sessions, heatmap telemetry, custom lessons, and character sets.
+            </p>
+            <p>
+              2. Launch the <strong>Bangla Typing Master</strong> Linux AppImage or DEB application, open <strong>Settings</strong>, and click <strong>Merge Firefox Backup</strong> to import everything without overwriting existing desktop data.
+            </p>
+          </div>
+        )}
 
         <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
           <div className="flex flex-wrap items-center gap-2">
@@ -466,11 +652,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             />
             <button
               type="button"
-              onClick={() => fileRef.current?.click()}
+              onClick={() => triggerBackupImport('merge')}
+              className="inline-flex items-center gap-1.5 h-9 px-3.5 text-xs font-medium rounded-lg border border-teal-300 dark:border-teal-800 text-teal-800 dark:text-teal-200 hover:bg-teal-50 dark:hover:bg-teal-950/50 whitespace-nowrap shrink-0"
+            >
+              <Upload className="w-3.5 h-3.5" />
+              Merge Backup (Keep Existing)
+            </button>
+            <button
+              type="button"
+              onClick={() => triggerBackupImport('replace')}
               className="inline-flex items-center gap-1.5 h-9 px-3.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 whitespace-nowrap shrink-0"
             >
               <Upload className="w-3.5 h-3.5" />
-              Restore Backup
+              Replace With Backup
             </button>
           </div>
 
@@ -579,17 +773,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <li>All 9 typing modes, custom drills, lessons, and custom text practice</li>
               <li>Built-in Avro Phonetic, Bijoy Classic, UniJoy, Jatiya, and Probhat engines</li>
               <li>Real-time grapheme evaluation, WPM/CPM stats, Keyboard Heatmap &amp; Finger Analyzer</li>
-              <li>IndexedDB local persistence, JSON/TXT lesson import/export, and Web Audio sound</li>
+              <li>Persistent Linux XDG storage + IndexedDB, bundled Bangla font, and zero network requests</li>
             </ul>
           </div>
           <div className="space-y-1.5">
             <p className="font-semibold text-slate-800 dark:text-slate-200">
-              Requires Initial Install or External OS Software
+              Optional OS Packages
             </p>
             <ul className="list-disc pl-4 space-y-1 text-slate-600 dark:text-slate-400">
-              <li>Initial extension/package download or Linux Bangla font packages (<code className="font-mono-tabular">fonts-noto-core</code> / <code className="font-mono-tabular">fonts-beng</code>)</li>
-              <li>Optional system-wide IME mode requires local Linux <code className="font-mono-tabular">IBus</code>, <code className="font-mono-tabular">Fcitx5</code>, or <code className="font-mono-tabular">OpenBangla Keyboard</code></li>
-              <li>Optional Google Web Fonts gracefully fall back to local Linux Bangla system fonts offline</li>
+              <li>Additional Bangla serif/sans fonts (<code className="font-mono-tabular">fonts-noto-core</code> / <code className="font-mono-tabular">fonts-beng</code>) if desired beyond the bundled Lohit Bengali font</li>
+              <li>Optional system-wide IME mode uses local Linux <code className="font-mono-tabular">IBus</code>, <code className="font-mono-tabular">Fcitx5</code>, or <code className="font-mono-tabular">OpenBangla Keyboard</code></li>
+              <li>Zero external CDN or Google Fonts requests — enforced by strict offline desktop CSP</li>
             </ul>
           </div>
         </div>

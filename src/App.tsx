@@ -25,6 +25,7 @@ import { buildPracticeForMode, generateCustomCharacterDrill } from './core/pract
 import {
   createInitialStorageData,
   loadAppData,
+  mergeBackupData,
   recordSessionInData,
   saveAppData,
 } from './core/storage';
@@ -59,7 +60,7 @@ const ROUTE_TITLES: Record<AppRoute, string> = {
   custom: 'Custom Text Practice',
   progress: 'Progress Dashboard',
   layouts: 'Bangla Keyboard Layouts',
-  settings: 'Settings & Extension',
+  settings: 'Settings & Local Data',
 };
 
 function parseHashRoute(): { route: AppRoute; mode?: PracticeMode } {
@@ -90,6 +91,7 @@ export default function App() {
   const [activeRoute, setActiveRoute] = useState<AppRoute>(() => parseHashRoute().route);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [showPopupPreview, setShowPopupPreview] = useState(false);
+  const allowNextDestructiveSaveRef = React.useRef(false);
 
   const [practiceConfig, setPracticeConfig] = useState<ActivePracticeConfig>(() =>
     buildPracticeForMode('word', 'beginner')
@@ -130,7 +132,9 @@ export default function App() {
   // Persist changes whenever state updates after hydration
   useEffect(() => {
     if (!hydrated) return;
-    saveAppData(data);
+    const allowDestructive = allowNextDestructiveSaveRef.current;
+    allowNextDestructiveSaveRef.current = false;
+    saveAppData(data, { allowDestructive });
   }, [data, hydrated]);
 
   // Apply light/dark theme to <html> reliably
@@ -626,15 +630,23 @@ export default function App() {
             <SettingsView
               data={data}
               onUpdateSetting={updateSetting}
-              onRestoreBackup={(next) => setData(next)}
-              onResetProgress={() =>
+              onRestoreBackup={(next, mode) => {
+                if (mode === 'replace') {
+                  allowNextDestructiveSaveRef.current = true;
+                  setData(next);
+                } else {
+                  setData((prev) => mergeBackupData(prev, next));
+                }
+              }}
+              onResetProgress={() => {
+                allowNextDestructiveSaveRef.current = true;
                 setData((prev) => ({
                   ...prev,
                   sessions: [],
                   charMistakeTotals: {},
                   charAttemptTotals: {},
-                }))
-              }
+                }));
+              }}
               onOpenPopupPreview={() => setShowPopupPreview(true)}
             />
           )}

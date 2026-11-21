@@ -1,3 +1,8 @@
+import {
+  isTauriDesktop,
+  loadNativePersistentData,
+  saveNativePersistentData,
+} from './desktopBridge';
 import { readFromIndexedDB, writeToIndexedDB } from './indexedDb';
 import type {
   AppStorageData,
@@ -60,7 +65,7 @@ export function createInitialStorageData(): AppStorageData {
       {
         id: 'ct-sample-1',
         title: 'বাংলা ও ইংরেজি মিশ্র অনুচ্ছেদ',
-        text: 'বাংলা Unicode এবং Firefox Extension ব্যবহার করে অফলাইনেই বাংলা টাইপিং অনুশীলন করা যায়। প্রতিদিন ১০ মিনিট সময় দিলে WPM ও নির্ভুলতা দ্রুত বৃদ্ধি পায়।',
+        text: 'বাংলা Unicode ব্যবহার করে অফলাইনেই বাংলা টাইপিং অনুশীলন করা যায়। প্রতিদিন ১০ মিনিট সময় দিলে WPM ও নির্ভুলতা দ্রুত বৃদ্ধি পায়।',
         createdAt: 1700000001000,
       },
     ],
@@ -143,15 +148,120 @@ function mergeWithDefaults(raw: unknown): AppStorageData {
 }
 
 /**
- * Offline-first data loader:
- * 1. Reads from IndexedDB (`BanglaTypingMasterDB`) as primary structured offline database.
- * 2. Falls back to Firefox `browser.storage.local` or `localStorage` and migrates automatically into IndexedDB.
+ * Non-destructive merge used when importing a Firefox JSON backup into the Desktop app
+ * (or reconciling WebView IndexedDB with native persistent XDG storage).
+ * Never drops existing sessions, custom lessons, custom character sets, or saved texts.
+ */
+export function mergeBackupData(
+  existing: AppStorageData,
+  incoming: AppStorageData
+): AppStorageData {
+  const sessionMap = new Map<string, TypingSessionResult>();
+  for (const s of existing.sessions) sessionMap.set(s.id, s);
+  for (const s of incoming.sessions) {
+    if (!sessionMap.has(s.id)) sessionMap.set(s.id, s);
+  }
+  const mergedSessions = Array.from(sessionMap.values()).sort(
+    (a, b) => a.timestamp - b.timestamp
+  );
+
+  const lessonMap = new Map<string, Lesson>();
+  for (const l of existing.customLessons) lessonMap.set(l.id, l);
+  for (const l of incoming.customLessons) {
+    const prev = lessonMap.get(l.id);
+    if (!prev || l.updatedAt > prev.updatedAt) {
+      lessonMap.set(l.id, l);
+    }
+  }
+  const mergedLessons = Array.from(lessonMap.values()).sort(
+    (a, b) => b.updatedAt - a.updatedAt
+  );
+
+  const charSetMap = new Map<string, CustomCharSet>();
+  for (const c of existing.customCharSets) charSetMap.set(c.id, c);
+  for (const c of incoming.customCharSets) {
+    if (!charSetMap.has(c.id)) charSetMap.set(c.id, c);
+  }
+
+  const textMap = new Map<string, SavedCustomText>();
+  for (const t of existing.savedCustomTexts) textMap.set(t.id, t);
+  for (const t of incoming.savedCustomTexts) {
+    if (!textMap.has(t.id)) textMap.set(t.id, t);
+  }
+
+  // Recompute mistake totals conservatively so merged sessions are reflected accurately
+  const mergedMistakes: Record<string, number> = { ...existing.charMistakeTotals };
+  for (const [ch, cnt] of Object.entries(incoming.charMistakeTotals)) {
+    mergedMistakes[ch] = Math.max(mergedMistakes[ch] || 0, cnt);
+  }
+  const mergedAttempts: Record<string, number> = { ...existing.charAttemptTotals };
+  for (const [ch, cnt] of Object.entries(incoming.charAttemptTotals)) {
+    mergedAttempts[ch] = Math.max(mergedAttempts[ch] || 0, cnt);
+  }
+
+  return {
+    version: 1,
+    settings: { ...DEFAULT_SETTINGS, ...incoming.settings, ...existing.settings },
+    sessions: mergedSessions,
+    customLessons: mergedLessons,
+    customCharSets: Array.from(charSetMap.values()),
+    savedCustomTexts: Array.from(textMap.values()),
+    charMistakeTotals: mergedMistakes,
+    charAttemptTotals: mergedAttempts,
+  };
+}
+
+/**
+ * Offline-first crash-safe data loader:
+ * 1. In Tauri Linux Desktop: loads native persistent XDG file (`user-data.json`) AND WebView IndexedDB.
+ *    If both exist with distinct records, merges safely; if only IndexedDB exists, migrates to XDG file.
+ * 2. In Firefox / Browser: reads from IndexedDB (`BanglaTypingMasterDB`) and migrates from
+ *    `browser.storage.local` or `localStorage` automatically.
  */
 export async function loadAppData(): Promise<AppStorageData> {
   try {
-    const idbData = await readFromIndexedDB();
+    const idbRaw = await readFromIndexedDB();
+    const idbData = idbRaw ? mergeWithDefaults(idbRaw) : null;
+
+    if (isTauriDesktop()) {
+      let nativeData: AppStorageData | null = null;
+      try {
+        const rawNative = await loadNativePersistentData();
+        if (rawNative) {
+          nativeData = mergeWithDefaults(JSON.parse(rawNative));
+        }
+      } catch {
+        // If native file read fails, fall back safely to IndexedDB without losing data
+      }
+
+      if (nativeData && idbData) {
+        // Reconcile non-destructively in case IndexedDB has any newer un-synced sessions
+        const reconciled =
+          idbData.sessions.length > nativeData.sessions.length ||
+          idbData.customLessons.length > nativeData.customLessons.length
+            ? mergeBackupData(nativeData, idbData)
+            : nativeData;
+        await writeToIndexedDB(reconciled);
+        if (reconciled !== nativeData) {
+          await saveNativePersistentData(JSON.stringify(reconciled), false).catch(() => undefined);
+        }
+        return reconciled;
+      }
+
+      if (nativeData) {
+        await writeToIndexedDB(nativeData);
+        return nativeData;
+      }
+
+      if (idbData) {
+        // First desktop migration: persist existing IndexedDB data into native XDG directory
+        await saveNativePersistentData(JSON.stringify(idbData), false).catch(() => undefined);
+        return idbData;
+      }
+    }
+
     if (idbData) {
-      return mergeWithDefaults(idbData);
+      return idbData;
     }
 
     const extStorage = getExtensionStorage();
@@ -160,6 +270,9 @@ export async function loadAppData(): Promise<AppStorageData> {
       if (res && res[STORAGE_KEY]) {
         const merged = mergeWithDefaults(res[STORAGE_KEY]);
         await writeToIndexedDB(merged);
+        if (isTauriDesktop()) {
+          await saveNativePersistentData(JSON.stringify(merged), false).catch(() => undefined);
+        }
         return merged;
       }
     }
@@ -169,6 +282,9 @@ export async function loadAppData(): Promise<AppStorageData> {
       if (raw) {
         const merged = mergeWithDefaults(JSON.parse(raw));
         await writeToIndexedDB(merged);
+        if (isTauriDesktop()) {
+          await saveNativePersistentData(JSON.stringify(merged), false).catch(() => undefined);
+        }
         return merged;
       }
     }
@@ -179,10 +295,26 @@ export async function loadAppData(): Promise<AppStorageData> {
 }
 
 /**
- * Saves application data into IndexedDB (primary) and mirrors lightweight snapshot
- * into Firefox `browser.storage.local` / `localStorage` so extension popup stays in sync.
+ * Saves application data atomically into:
+ * - Tauri native persistent XDG app data file (when running as Linux Desktop app)
+ * - IndexedDB (`BanglaTypingMasterDB`)
+ * - Firefox `browser.storage.local` / `localStorage` mirror
  */
-export async function saveAppData(data: AppStorageData): Promise<void> {
+export async function saveAppData(
+  data: AppStorageData,
+  options?: { allowDestructive?: boolean }
+): Promise<void> {
+  if (isTauriDesktop()) {
+    try {
+      await saveNativePersistentData(
+        JSON.stringify(data),
+        Boolean(options?.allowDestructive)
+      );
+    } catch {
+      // IndexedDB still stores the current state; guard errors protect against silent wipes
+    }
+  }
+
   try {
     await writeToIndexedDB(data);
   } catch {
@@ -198,7 +330,7 @@ export async function saveAppData(data: AppStorageData): Promise<void> {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
     }
   } catch {
-    // Ignore quota errors on secondary mirror; IndexedDB holds the full history
+    // Ignore quota errors on secondary mirror; primary storage holds the full history
   }
 }
 
@@ -206,7 +338,7 @@ export function exportFullBackupJson(data: AppStorageData): string {
   return JSON.stringify(
     {
       app: 'Bangla Typing Master',
-      storageEngine: 'IndexedDB',
+      storageEngine: isTauriDesktop() ? 'TauriXdgFile+IndexedDB' : 'IndexedDB',
       exportedAt: new Date().toISOString(),
       data,
     },
