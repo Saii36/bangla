@@ -1,0 +1,85 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  :root {
+    --font-sans: "Plus Jakarta Sans", "Hind Siliguri", system-ui, -apple-system, sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+    --font-bangla-siliguri: "Hind Siliguri", "Noto Sans Bengali", "Vrinda", "SolaimanLipi", sans-serif;
+    --font-bangla-sans: "Noto Sans Bengali", "Hind Siliguri", sans-serif;
+    --font-bangla-serif: "Noto Serif Bengali", "Tiro Bangla", serif;
+    --font-bangla-tiro: "Tiro Bangla", "Noto Serif Bengali", serif;
+  }
+
+  html {
+    font-family: var(--font-sans);
+    scroll-behavior: smooth;
+  }
+
+  .dark body {
+    letter-spacing: 0.008em;
+  }
+}
+
+.font-bangla-siliguri {
+  font-family: var(--font-bangla-siliguri);
+}
+
+.font-bangla-sans {
+  font-family: var(--font-bangla-sans);
+}
+
+.font-bangla-serif {
+  font-family: var(--font-bangla-serif);
+}
+
+.font-bangla-tiro {
+  font-family: var(--font-bangla-tiro);
+}
+
+.font-mono-tabular {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes caret-blink {
+  0%, 49% {
+    opacity: 1;
+  }
+  50%, 100% {
+    opacity: 0.35;
+  }
+}
+
+.typing-caret {
+  animation: caret-blink 1.05s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .typing-caret {
+    animation: none;
+  }
+}
+
+/* Custom subtle scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.35);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.55);
+}
