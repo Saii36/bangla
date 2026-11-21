@@ -1,13 +1,15 @@
 import React, { useMemo, useState } from 'react';
-import { Play, Sparkles, ArrowRight } from 'lucide-react';
+import { Play, Sparkles, ArrowRight, BarChart3, Keyboard } from 'lucide-react';
 import { getLayoutById } from '../core/layouts/registry';
 import { computeProgressAnalytics } from '../core/stats';
-import type { PracticeMode, TypingSessionResult } from '../types';
+import type { LayoutId, PracticeMode, TypingSessionResult } from '../types';
+import { KeyboardHeatmapAnalyzer } from './KeyboardHeatmapAnalyzer';
 
 interface ProgressDashboardProps {
   sessions: TypingSessionResult[];
   charMistakeTotals: Record<string, number>;
-  onLaunchWeakChars: (chars: string[]) => void;
+  activeLayoutId: LayoutId;
+  onLaunchWeakChars: (chars: string[], title?: string) => void;
   onLaunchMode: (mode: PracticeMode) => void;
 }
 
@@ -139,9 +141,11 @@ const TrendChart: React.FC<{
 export const ProgressDashboard: React.FC<ProgressDashboardProps> = ({
   sessions,
   charMistakeTotals,
+  activeLayoutId,
   onLaunchWeakChars,
   onLaunchMode,
 }) => {
+  const [dashboardSection, setDashboardSection] = useState<'overview' | 'heatmap'>('overview');
   const [range, setRange] = useState<'all' | '30d' | '7d'>('all');
 
   const filteredSessions = useMemo(() => {
@@ -181,35 +185,64 @@ export const ProgressDashboard: React.FC<ProgressDashboardProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* Top Range Bar */}
+      {/* Top Section Switcher & Range Bar */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-base font-semibold text-slate-900 dark:text-slate-100">
-            Progress &amp; Performance Analytics
-          </h2>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-            Stored locally in your browser. Track speed, accuracy, layout mastery, and weak Bangla graphemes.
-          </p>
+        <div className="inline-flex items-center gap-1 p-1 rounded-xl bg-slate-200/70 dark:bg-slate-900">
+          <button
+            type="button"
+            onClick={() => setDashboardSection('overview')}
+            className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 ${
+              dashboardSection === 'overview'
+                ? 'bg-white dark:bg-slate-800 text-teal-700 dark:text-teal-300 shadow-xs'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+            }`}
+          >
+            <BarChart3 className="w-3.5 h-3.5" />
+            Overview &amp; Progression
+          </button>
+          <button
+            type="button"
+            onClick={() => setDashboardSection('heatmap')}
+            className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 ${
+              dashboardSection === 'heatmap'
+                ? 'bg-white dark:bg-slate-800 text-teal-700 dark:text-teal-300 shadow-xs'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+            }`}
+          >
+            <Keyboard className="w-3.5 h-3.5" />
+            Keyboard Heatmap &amp; Fingers
+          </button>
         </div>
-        <div className="flex items-center gap-1 p-1 rounded-lg bg-slate-200/70 dark:bg-slate-900">
-          {(['7d', '30d', 'all'] as const).map((r) => (
-            <button
-              key={r}
-              type="button"
-              onClick={() => setRange(r)}
-              className={`px-3 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                range === r
-                  ? 'bg-white dark:bg-slate-800 text-teal-700 dark:text-teal-300 shadow-xs'
-                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
-              }`}
-            >
-              {r === '7d' ? 'Last 7 Days' : r === '30d' ? 'Last 30 Days' : 'All Time'}
-            </button>
-          ))}
-        </div>
+
+        {dashboardSection === 'overview' && (
+          <div className="flex items-center gap-1 p-1 rounded-lg bg-slate-200/70 dark:bg-slate-900">
+            {(['7d', '30d', 'all'] as const).map((r) => (
+              <button
+                key={r}
+                type="button"
+                onClick={() => setRange(r)}
+                className={`px-3 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                  range === r
+                    ? 'bg-white dark:bg-slate-800 text-teal-700 dark:text-teal-300 shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+                }`}
+              >
+                {r === '7d' ? 'Last 7 Days' : r === '30d' ? 'Last 30 Days' : 'All Time'}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
-      {/* Primary KPI Grid */}
+      {dashboardSection === 'heatmap' ? (
+        <KeyboardHeatmapAnalyzer
+          sessions={sessions}
+          activeLayoutId={activeLayoutId}
+          onPracticeWeakChars={onLaunchWeakChars}
+        />
+      ) : (
+        <>
+          {/* Primary KPI Grid */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#121A26] p-4">
           <p className="text-xs text-slate-500 dark:text-slate-400">Best Speed</p>
@@ -604,6 +637,8 @@ export const ProgressDashboard: React.FC<ProgressDashboardProps> = ({
           </div>
         )}
       </div>
+        </>
+      )}
     </div>
   );
 };

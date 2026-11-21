@@ -3,12 +3,12 @@
 
 @layer base {
   :root {
-    --font-sans: "Plus Jakarta Sans", "Hind Siliguri", system-ui, -apple-system, sans-serif;
-    --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
-    --font-bangla-siliguri: "Hind Siliguri", "Noto Sans Bengali", "Vrinda", "SolaimanLipi", sans-serif;
-    --font-bangla-sans: "Noto Sans Bengali", "Hind Siliguri", sans-serif;
-    --font-bangla-serif: "Noto Serif Bengali", "Tiro Bangla", serif;
-    --font-bangla-tiro: "Tiro Bangla", "Noto Serif Bengali", serif;
+    --font-sans: "Plus Jakarta Sans", "Hind Siliguri", "Noto Sans Bengali", "Ubuntu", system-ui, -apple-system, sans-serif;
+    --font-mono: "JetBrains Mono", "Ubuntu Mono", "DejaVu Sans Mono", ui-monospace, SFMono-Regular, monospace;
+    --font-bangla-siliguri: "Hind Siliguri", "Noto Sans Bengali", "Kalpurush", "SolaimanLipi", "Siyam Rupali", "Lohit Bengali", "Mukti Narrow", "Vrinda", sans-serif;
+    --font-bangla-sans: "Noto Sans Bengali", "Lohit Bengali", "Hind Siliguri", "Kalpurush", "Mukti Narrow", sans-serif;
+    --font-bangla-serif: "Noto Serif Bengali", "Tiro Bangla", "SolaimanLipi", "Kalpurush", serif;
+    --font-bangla-tiro: "Tiro Bangla", "Noto Serif Bengali", "Siyam Rupali", "Kalpurush", serif;
   }
 
   html {

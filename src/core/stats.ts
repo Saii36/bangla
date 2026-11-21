@@ -86,6 +86,7 @@ export function createSessionRecord(params: {
   durationSeconds: number;
   totalKeyMistakes: number;
   sessionMistakeMap: Record<string, number>;
+  keyEvents?: import('../types').PhysicalKeyEvent[];
 }): TypingSessionResult {
   const now = Date.now();
   const dateObj = new Date(now);
@@ -106,6 +107,12 @@ export function createSessionRecord(params: {
     const cat = categorizeBanglaGrapheme(grapheme);
     mistakesByCategory[cat] = (mistakesByCategory[cat] || 0) + count;
   }
+
+  const keyEvents = params.keyEvents ?? [];
+  const hasBangla = keyEvents.some((e) => e.script === 'bangla');
+  const hasEnglish = keyEvents.some((e) => e.script === 'english');
+  const languageMix: TypingSessionResult['languageMix'] =
+    hasBangla && hasEnglish ? 'mixed' : hasEnglish ? 'english' : 'bangla';
 
   return {
     id: `sess-${now}-${Math.random().toString(36).slice(2, 7)}`,
@@ -128,6 +135,8 @@ export function createSessionRecord(params: {
     durationSeconds: Math.max(1, Math.round(params.durationSeconds)),
     mistakesByChar: mergedMistakes,
     mistakesByCategory,
+    keyEvents,
+    languageMix,
   };
 }
 

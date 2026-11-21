@@ -247,7 +247,7 @@ export default function App() {
   }, []);
 
   const handlePracticeWeakChars = useCallback(
-    (chars: string[]) => {
+    (chars: string[], customTitle?: string) => {
       const text = generateCustomCharacterDrill({
         chars,
         includeCombinations: true,
@@ -258,7 +258,7 @@ export default function App() {
       });
       setPracticeConfig({
         mode: 'weak',
-        title: `Targeted Weak Drill (${chars.slice(0, 5).join(' ')})`,
+        title: customTitle || `Targeted Weak Drill (${chars.slice(0, 5).join(' ')})`,
         text,
         sourceChars: chars,
         allowRegenerate: true,
@@ -605,6 +605,7 @@ export default function App() {
             <ProgressDashboard
               sessions={data.sessions}
               charMistakeTotals={data.charMistakeTotals}
+              activeLayoutId={data.settings.layoutId}
               onLaunchWeakChars={handlePracticeWeakChars}
               onLaunchMode={(mode) => handleSelectMode(mode)}
             />

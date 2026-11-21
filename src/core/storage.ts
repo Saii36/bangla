@@ -1,3 +1,4 @@
+import { readFromIndexedDB, writeToIndexedDB } from './indexedDb';
 import type {
   AppStorageData,
   CustomCharSet,
@@ -74,8 +75,7 @@ interface ExtensionStorageAPI {
 }
 
 /**
- * Detects Firefox WebExtension `browser.storage.local` (or Chromium `chrome.storage.local`)
- * and returns a clean promise-based interface. Returns null in standard browser preview.
+ * Detects Firefox WebExtension `browser.storage.local` (or Chromium `chrome.storage.local`).
  */
 function getExtensionStorage(): ExtensionStorageAPI | null {
   const g = globalThis as unknown as {
@@ -142,28 +142,53 @@ function mergeWithDefaults(raw: unknown): AppStorageData {
   };
 }
 
+/**
+ * Offline-first data loader:
+ * 1. Reads from IndexedDB (`BanglaTypingMasterDB`) as primary structured offline database.
+ * 2. Falls back to Firefox `browser.storage.local` or `localStorage` and migrates automatically into IndexedDB.
+ */
 export async function loadAppData(): Promise<AppStorageData> {
   try {
+    const idbData = await readFromIndexedDB();
+    if (idbData) {
+      return mergeWithDefaults(idbData);
+    }
+
     const extStorage = getExtensionStorage();
     if (extStorage) {
       const res = await extStorage.get([STORAGE_KEY]);
       if (res && res[STORAGE_KEY]) {
-        return mergeWithDefaults(res[STORAGE_KEY]);
+        const merged = mergeWithDefaults(res[STORAGE_KEY]);
+        await writeToIndexedDB(merged);
+        return merged;
       }
     }
+
     if (typeof window !== 'undefined' && window.localStorage) {
       const raw = window.localStorage.getItem(STORAGE_KEY);
       if (raw) {
-        return mergeWithDefaults(JSON.parse(raw));
+        const merged = mergeWithDefaults(JSON.parse(raw));
+        await writeToIndexedDB(merged);
+        return merged;
       }
     }
   } catch {
-    // Fallback to defaults if corrupted
+    // Fallback cleanly to defaults
   }
   return createInitialStorageData();
 }
 
+/**
+ * Saves application data into IndexedDB (primary) and mirrors lightweight snapshot
+ * into Firefox `browser.storage.local` / `localStorage` so extension popup stays in sync.
+ */
 export async function saveAppData(data: AppStorageData): Promise<void> {
+  try {
+    await writeToIndexedDB(data);
+  } catch {
+    // Continue to mirrors
+  }
+
   try {
     const extStorage = getExtensionStorage();
     if (extStorage) {
@@ -173,7 +198,7 @@ export async function saveAppData(data: AppStorageData): Promise<void> {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
     }
   } catch {
-    // Storage quota or restricted context
+    // Ignore quota errors on secondary mirror; IndexedDB holds the full history
   }
 }
 
@@ -181,6 +206,7 @@ export function exportFullBackupJson(data: AppStorageData): string {
   return JSON.stringify(
     {
       app: 'Bangla Typing Master',
+      storageEngine: 'IndexedDB',
       exportedAt: new Date().toISOString(),
       data,
     },
@@ -210,7 +236,6 @@ export function downloadTextFile(filename: string, content: string, mime = 'appl
   URL.revokeObjectURL(url);
 }
 
-/** Helper to append a finished typing session and update cumulative mistake counters */
 export function recordSessionInData(
   prev: AppStorageData,
   session: TypingSessionResult

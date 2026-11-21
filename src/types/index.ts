@@ -60,14 +60,108 @@ export type AppRoute =
   | 'layouts'
   | 'settings';
 
+export type FingerId =
+  | 'lp'
+  | 'lr'
+  | 'lm'
+  | 'li'
+  | 'lthumb'
+  | 'rthumb'
+  | 'ri'
+  | 'rm'
+  | 'rr'
+  | 'rp';
+
+export type KeyboardRowName = 'number' | 'top' | 'home' | 'bottom' | 'space';
+
+export type HeatmapViewMode = 'keyboard' | 'finger' | 'combined';
+
+export type HeatmapMetricMode =
+  | 'error-frequency'
+  | 'accuracy'
+  | 'total-presses'
+  | 'error-ratio';
+
+export type HeatmapTimeRange = 'all' | 'today' | '7d' | '30d' | 'custom' | 'session';
+
+export interface HeatmapFilters {
+  timeRange: HeatmapTimeRange;
+  customStartDate: string; // YYYY-MM-DD
+  customEndDate: string; // YYYY-MM-DD
+  sessionId: string; // when timeRange === 'session'
+  inputMethod: InputMethodType | 'all';
+  layoutId: LayoutId | 'all';
+  script: 'all' | 'bangla' | 'english';
+  metric: HeatmapMetricMode;
+  displayLayout: LayoutId | 'english';
+}
+
+/**
+ * Physical keystroke record captured independently of Bangla Unicode character evaluation.
+ * - For Avro Phonetic: records the physical Latin key (`latinKey`, `code`) and resulting Bangla output (`producedOutput`).
+ * - For fixed layouts (Bijoy, Jatiya, Probhat): records the physical key mapped directly via layout keymap.
+ * - For OS/System IME: `finger` is omitted (`null`) when physical mapping cannot be verified.
+ */
+export interface PhysicalKeyEvent {
+  /** Standard KeyboardEvent.code (e.g. 'KeyJ', 'KeyD', 'Space') */
+  code: string;
+  /** Physical Latin key legend pressed (e.g. 'j', 'J', 'd', ' ') */
+  latinKey: string;
+  /** Assigned finger based on standard touch-typing physical layout, or null if unavailable */
+  finger: FingerId | null;
+  /** Whether this physical keystroke contributed to a correct or incorrect typing state */
+  correct: boolean;
+  /** Expected target character or grapheme at the time of press */
+  expectedOutput: string;
+  /** Actual Bangla or English output produced by this keystroke (or phonetic commit) */
+  producedOutput: string;
+  /** Whether user was typing Bangla or English text */
+  script: 'bangla' | 'english';
+  /** Layout active during this keystroke */
+  layoutId: LayoutId;
+  /** Input method category */
+  inputMethod: InputMethodType;
+  /** Whether Shift modifier was active */
+  shifted?: boolean;
+  /** Timestamp (ms) */
+  timestamp: number;
+}
+
+export interface KeyPerformanceAggregate {
+  code: string;
+  attempts: number;
+  correct: number;
+  incorrect: number;
+  accuracy: number; // 0-100
+  errorRatio: number; // 0-100
+  commonMistakes: Array<{ expected: string; actual: string; count: number }>;
+  producedOutputs: Array<{ output: string; count: number }>;
+  recentHistory: Array<{ sessionId: string; dateKey: string; accuracy: number; attempts: number }>;
+}
+
+export interface FingerPerformanceAggregate {
+  finger: FingerId;
+  label: string;
+  hand: 'left' | 'right';
+  attempts: number;
+  correct: number;
+  incorrect: number;
+  accuracy: number;
+  errorRatio: number;
+  usageShare: number; // percentage of all finger-mapped presses
+  status: 'untested' | 'optimal' | 'overused' | 'underperforming';
+  topMistypedKeys: Array<{ code: string; latin: string; incorrect: number; accuracy: number }>;
+  recentHistory: Array<{ sessionId: string; dateKey: string; accuracy: number; attempts: number }>;
+}
+
 export interface BanglaCharItem {
   id: string;
   char: string;
-  practiceToken?: string; // e.g., for kar-chinho 'ি', practice token can be 'কি' or standalone 'ি'
+  practiceToken?: string;
   name: string;
   category: CharCategoryId;
   subGroup?: string;
-  breakdown?: string; // e.g., 'ক + ্ + ষ'
+  breakdown?: string;
   avroHint?: string;
   bijoyHint?: string;
   jatiyaHint?: string;
@@ -106,7 +200,7 @@ export interface KeyCapSpec {
   bn?: string;
   bnShift?: string;
   finger: 'lp' | 'lr' | 'lm' | 'li' | 'ri' | 'rm' | 'rr' | 'rp' | 'thumb';
-  width?: number; // relative key width, default 1
+  width?: number;
   isHome?: boolean;
 }
 
@@ -124,7 +218,6 @@ export interface LayoutDefinition {
   keyboardRows: KeyCapSpec[][];
   keymap?: Record<string, string>;
   shiftKeymap?: Record<string, string>;
-  /** Bijoy Classic uses pre-base vowel ordering for ি, ে, ৈ */
   preBaseVowels?: boolean;
 }
 
@@ -155,11 +248,11 @@ export interface TypingSessionResult {
   layoutId: LayoutId;
   lessonId?: string;
   lessonTitle: string;
-  wpmStandard: number; // (correctGraphemes / 5) / minutes
+  wpmStandard: number;
   wpmNet: number;
-  wpmWords: number; // actual space-delimited words / minutes
+  wpmWords: number;
   cpm: number;
-  accuracy: number; // 0-100
+  accuracy: number;
   totalMistakes: number;
   correctChars: number;
   incorrectChars: number;
@@ -167,8 +260,11 @@ export interface TypingSessionResult {
   completionPercent: number;
   durationSeconds: number;
   mistakesByChar: Record<string, number>;
-  /** Category keys where mistakes occurred */
   mistakesByCategory: Record<string, number>;
+  /** Physical keystroke telemetry tracked independently from Bangla character mistakes */
+  keyEvents?: PhysicalKeyEvent[];
+  /** Dominant language script typed in this session */
+  languageMix?: 'bangla' | 'english' | 'mixed';
 }
 
 export interface SavedCustomText {
@@ -183,7 +279,7 @@ export interface UserSettings {
   layoutId: LayoutId;
   difficulty: Difficulty;
   testDurationSec: number;
-  fontSize: number; // px (18 to 40)
+  fontSize: number;
   fontFamily: BanglaFontFamily;
   colorPreset: ColorPreset;
   soundEnabled: boolean;
@@ -212,8 +308,8 @@ export interface ActivePracticeConfig {
   title: string;
   text: string;
   lessonId?: string;
-  durationSec?: number; // for timed or exam mode
-  maxErrors?: number; // for accuracy mode
+  durationSec?: number;
+  maxErrors?: number;
   sourceChars?: string[];
   allowRegenerate?: boolean;
   regenerateOptions?: {

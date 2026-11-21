@@ -11,6 +11,11 @@ import {
   Check,
   AlertCircle,
 } from 'lucide-react';
+import {
+  FINGER_META,
+  PHYSICAL_KEYBOARD_ROWS,
+  resolveFingerForPhysicalKey,
+} from '../core/heatmapEngine';
 import { isAvroBufferChar, transliterateAvroToken } from '../core/layouts/avroEngine';
 import {
   FixedKeyState,
@@ -27,6 +32,7 @@ import type {
   ColorPreset,
   Difficulty,
   LayoutId,
+  PhysicalKeyEvent,
   PracticeMode,
   TypingSessionResult,
   UserSettings,
@@ -111,6 +117,9 @@ export const TypingArena: React.FC<TypingArenaProps> = ({
   const activeSpanRef = useRef<HTMLSpanElement | null>(null);
   const textContainerRef = useRef<HTMLDivElement | null>(null);
   const prevIncorrectRef = useRef(0);
+  const keyEventsRef = useRef<PhysicalKeyEvent[]>([]);
+  const lastHandRef = useRef<'left' | 'right' | undefined>(undefined);
+  const lastNativeKeyRef = useRef<{ code: string; key: string; shifted: boolean } | null>(null);
 
   const activeLayout = useMemo(() => getLayoutById(settings.layoutId), [settings.layoutId]);
   const allLayouts = useMemo(() => getAllLayouts(), []);
@@ -139,6 +148,9 @@ export const TypingArena: React.FC<TypingArenaProps> = ({
     setFinishedResult(null);
     setEndedReason('completed');
     prevIncorrectRef.current = 0;
+    keyEventsRef.current = [];
+    lastHandRef.current = undefined;
+    lastNativeKeyRef.current = null;
     requestAnimationFrame(() => {
       inputRef.current?.focus();
     });
@@ -202,6 +214,7 @@ export const TypingArena: React.FC<TypingArenaProps> = ({
         durationSeconds: elapsed,
         totalKeyMistakes,
         sessionMistakeMap: sessionMistakes,
+        keyEvents: [...keyEventsRef.current],
       });
       setEndedReason(reason);
       setFinishedResult(record);
@@ -301,9 +314,53 @@ export const TypingArena: React.FC<TypingArenaProps> = ({
     }
   }, [startedAt]);
 
+  const inferCodeFromChar = (ch: string): string => {
+    if (ch === ' ') return 'Space';
+    if (ch === '\n') return 'Enter';
+    const flat = PHYSICAL_KEYBOARD_ROWS.flat();
+    const match = flat.find((k) => k.en === ch || k.enShift === ch);
+    return match?.code ?? 'Unidentified';
+  };
+
+  const recordPhysicalKey = useCallback(
+    (params: {
+      code: string;
+      latinKey: string;
+      shifted?: boolean;
+      correct: boolean;
+      expectedOutput: string;
+      producedOutput: string;
+      script: 'bangla' | 'english';
+    }) => {
+      if (!params.code || params.code === 'Unidentified') return;
+      const finger = resolveFingerForPhysicalKey(
+        params.code,
+        settings.layoutId,
+        lastHandRef.current
+      );
+      if (finger) {
+        lastHandRef.current = FINGER_META[finger].hand;
+      }
+      keyEventsRef.current.push({
+        code: params.code,
+        latinKey: params.latinKey,
+        finger,
+        correct: params.correct,
+        expectedOutput: params.expectedOutput,
+        producedOutput: params.producedOutput,
+        script: params.script,
+        layoutId: settings.layoutId,
+        inputMethod: activeLayout.type,
+        shifted: params.shifted,
+        timestamp: Date.now(),
+      });
+    },
+    [settings.layoutId, activeLayout.type]
+  );
+
   // Process a single keystroke (used by both physical keyboard and virtual keyboard clicks)
   const handleProgrammaticKey = useCallback(
-    (key: string) => {
+    (key: string, physicalCode?: string, shifted?: boolean) => {
       if (finishedResult) return;
       ensureStarted();
 
@@ -311,37 +368,126 @@ export const TypingArena: React.FC<TypingArenaProps> = ({
         playKeyClick();
       }
 
+      const code = physicalCode || inferCodeFromChar(key);
+      const expectedTarget = evaluation.items[evaluation.cursorIndex]?.target ?? '';
+      const isEnglishTarget = /^[A-Za-z0-9]$/.test(expectedTarget);
+      const script: 'bangla' | 'english' =
+        englishOverride || isEnglishTarget ? 'english' : 'bangla';
+
       if (englishOverride || settings.layoutId === 'system-ime') {
-        setCommittedText((prev) => prev + key);
+        const nextText = committedText + key;
+        const afterEval = evaluateTypingGraphemes(config.text, nextText, {
+          autoPunctuation: settings.autoPunctuation,
+        });
+        recordPhysicalKey({
+          code,
+          latinKey: key,
+          shifted,
+          correct: afterEval.incorrectCount <= evaluation.incorrectCount,
+          expectedOutput: expectedTarget,
+          producedOutput: key,
+          script,
+        });
+        setCommittedText(nextText);
         return;
       }
 
       if (settings.layoutId === 'avro') {
+        let nextCommitted = committedText;
+        let nextBuf = avroBuffer;
+        let produced = '';
+
         if (key === ' ' || key === '\n') {
-          setCommittedText((prev) => prev + transliterateAvroToken(avroBuffer) + key);
-          setAvroBuffer('');
+          const flushed = transliterateAvroToken(avroBuffer);
+          nextCommitted = committedText + flushed + key;
+          nextBuf = '';
+          produced = key;
         } else if (isAvroBufferChar(key)) {
-          setAvroBuffer((prev) => prev + key);
+          nextBuf = avroBuffer + key;
+          const segs = segmentBanglaGraphemes(transliterateAvroToken(nextBuf));
+          produced = segs[segs.length - 1] ?? transliterateAvroToken(nextBuf);
         } else {
-          setCommittedText((prev) => prev + transliterateAvroToken(avroBuffer) + key);
-          setAvroBuffer('');
+          const flushed = transliterateAvroToken(avroBuffer);
+          nextCommitted = committedText + flushed + key;
+          nextBuf = '';
+          produced = key;
         }
+
+        const nextEffective = nextBuf ? nextCommitted + transliterateAvroToken(nextBuf) : nextCommitted;
+        const afterEval = evaluateTypingGraphemes(config.text, nextEffective, {
+          isComposing: nextBuf.length > 0,
+          autoPunctuation: settings.autoPunctuation,
+        });
+
+        // Only penalize this physical Latin key if it introduced a new mismatch
+        const isCorrect = afterEval.incorrectCount <= evaluation.incorrectCount;
+
+        recordPhysicalKey({
+          code,
+          latinKey: key,
+          shifted,
+          correct: isCorrect,
+          expectedOutput: expectedTarget,
+          producedOutput: produced,
+          script,
+        });
+
+        setCommittedText(nextCommitted);
+        setAvroBuffer(nextBuf);
         return;
       }
 
       // Fixed keyboard layout (Bijoy Classic, Bijoy Compatible, Jatiya, Probhat)
       const res = processFixedLayoutKey(settings.layoutId, key, fixedState, committedText);
       if (res) {
-        setCommittedText((prev) => {
-          const base =
-            res.replaceTrailing && res.replaceTrailing > 0
-              ? prev.slice(0, -res.replaceTrailing)
-              : prev;
-          return base + res.append;
+        const base =
+          res.replaceTrailing && res.replaceTrailing > 0
+            ? committedText.slice(0, -res.replaceTrailing)
+            : committedText;
+        const nextCommitted = base + res.append;
+        const afterEval = evaluateTypingGraphemes(config.text, nextCommitted, {
+          isComposing: res.nextState.pendingLink || Boolean(res.nextState.pendingPreVowel),
+          autoPunctuation: settings.autoPunctuation,
         });
+
+        // For Bijoy Classic pre-base vowel key (d/c/C), verify against expected target grapheme
+        let isCorrect = afterEval.incorrectCount <= evaluation.incorrectCount;
+        let produced = res.append;
+        if (!res.append && res.nextState.pendingPreVowel) {
+          produced = res.nextState.pendingPreVowel;
+          isCorrect =
+            expectedTarget.includes(res.nextState.pendingPreVowel) ||
+            (res.nextState.pendingPreVowel === 'ে' &&
+              (expectedTarget.includes('ো') || expectedTarget.includes('ৌ')));
+        }
+
+        recordPhysicalKey({
+          code,
+          latinKey: key,
+          shifted,
+          correct: isCorrect,
+          expectedOutput: expectedTarget,
+          producedOutput: produced,
+          script,
+        });
+
+        setCommittedText(nextCommitted);
         setFixedState(res.nextState);
       } else {
-        setCommittedText((prev) => prev + key);
+        const nextCommitted = committedText + key;
+        const afterEval = evaluateTypingGraphemes(config.text, nextCommitted, {
+          autoPunctuation: settings.autoPunctuation,
+        });
+        recordPhysicalKey({
+          code,
+          latinKey: key,
+          shifted,
+          correct: afterEval.incorrectCount <= evaluation.incorrectCount,
+          expectedOutput: expectedTarget,
+          producedOutput: key,
+          script,
+        });
+        setCommittedText(nextCommitted);
         setFixedState(INITIAL_FIXED_STATE);
       }
     },
@@ -351,10 +497,14 @@ export const TypingArena: React.FC<TypingArenaProps> = ({
       settings.soundEnabled,
       settings.keyboardSoundEnabled,
       settings.layoutId,
+      settings.autoPunctuation,
       englishOverride,
       avroBuffer,
       fixedState,
       committedText,
+      config.text,
+      evaluation,
+      recordPhysicalKey,
     ]
   );
 
@@ -389,10 +539,11 @@ export const TypingArena: React.FC<TypingArenaProps> = ({
     // Let OS shortcuts (Ctrl+V, Ctrl+A, Cmd+C, etc.) work naturally
     if (e.ctrlKey || e.metaKey || e.altKey) return;
 
-    // In OS / System IME mode, let native browser & IME handle everything
+    // In OS / System IME mode or English override, record physical key metadata & let native input process
     if (settings.layoutId === 'system-ime' || englishOverride) {
       if (e.key.length === 1 || e.key === 'Enter') {
         ensureStarted();
+        lastNativeKeyRef.current = { code: e.code, key: e.key, shifted: e.shiftKey };
         if (settings.soundEnabled && settings.keyboardSoundEnabled) {
           playKeyClick();
         }
@@ -416,11 +567,9 @@ export const TypingArena: React.FC<TypingArenaProps> = ({
       }
       setCommittedText((prev) => {
         if (!prev) return '';
-        // Remove last grapheme or code point cleanly so backspace feels natural
         const segs = segmentBanglaGraphemes(prev);
         if (segs.length === 0) return '';
         const last = segs[segs.length - 1];
-        // If last grapheme has multiple code points (e.g. 'কি' or 'ক্ষ'), remove last code unit for fine editing
         const lastChars = Array.from(last);
         if (lastChars.length > 1) {
           return prev.slice(0, prev.length - lastChars[lastChars.length - 1].length);
@@ -432,7 +581,7 @@ export const TypingArena: React.FC<TypingArenaProps> = ({
 
     if (e.key === 'Enter') {
       e.preventDefault();
-      handleProgrammaticKey('\n');
+      handleProgrammaticKey('\n', e.code, e.shiftKey);
       return;
     }
 
@@ -443,14 +592,13 @@ export const TypingArena: React.FC<TypingArenaProps> = ({
 
     // Printable single character -> route through built-in layout engine
     if (e.key.length === 1) {
-      // If user is already typing native Bangla Unicode characters via OS IME even while Avro is selected,
-      // let native Bangla pass straight through!
       if (/[\u0980-\u09FF]/.test(e.key)) {
         ensureStarted();
+        lastNativeKeyRef.current = { code: e.code, key: e.key, shifted: e.shiftKey };
         return;
       }
       e.preventDefault();
-      handleProgrammaticKey(e.key);
+      handleProgrammaticKey(e.key, e.code, e.shiftKey);
     }
   };
 
@@ -459,12 +607,34 @@ export const TypingArena: React.FC<TypingArenaProps> = ({
     setPressedCode(null);
   };
 
-  // Handle native OS IME input changes (System IME, mobile keyboards, or English override)
+  // Handle native OS IME input changes (System IME, Linux IBus/Fcitx5, or English override)
   const handleNativeChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     if (finishedResult) return;
     if (settings.layoutId === 'system-ime' || englishOverride || isComposingIME) {
       ensureStarted();
-      setCommittedText(normalizeBangla(e.target.value));
+      const nextVal = normalizeBangla(e.target.value);
+      const lastKey = lastNativeKeyRef.current;
+      if (lastKey && nextVal.length > committedText.length && !isComposingIME) {
+        const expectedTarget = evaluation.items[evaluation.cursorIndex]?.target ?? '';
+        const afterEval = evaluateTypingGraphemes(config.text, nextVal, {
+          autoPunctuation: settings.autoPunctuation,
+        });
+        const segs = segmentBanglaGraphemes(nextVal);
+        const produced = segs[segs.length - 1] ?? lastKey.key;
+        const script: 'bangla' | 'english' =
+          englishOverride || /^[A-Za-z0-9]$/.test(produced) ? 'english' : 'bangla';
+        recordPhysicalKey({
+          code: lastKey.code,
+          latinKey: lastKey.key,
+          shifted: lastKey.shifted,
+          correct: afterEval.incorrectCount <= evaluation.incorrectCount,
+          expectedOutput: expectedTarget,
+          producedOutput: produced,
+          script,
+        });
+        lastNativeKeyRef.current = null;
+      }
+      setCommittedText(nextVal);
     }
   };
 

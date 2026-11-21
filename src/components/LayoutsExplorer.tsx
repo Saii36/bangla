@@ -188,6 +188,47 @@ export const LayoutsExplorer: React.FC<LayoutsExplorerProps> = ({
           <VirtualKeyboard layoutId={inspected.id} />
         </div>
       </div>
+
+      {/* Linux Mint / Ubuntu Native Input Method Integration & Compatibility Notes */}
+      <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#121A26] p-6 space-y-4">
+        <div>
+          <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+            Linux Native Input Integration (Linux Mint &amp; Ubuntu)
+          </h3>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
+            You do not need to replace your existing Linux keyboard setup. Choose <strong>OS / System IME</strong> to practice with your native Linux Bangla input method, or use our built-in offline engines when no system Bangla IME is installed.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+          <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/50 p-4 space-y-1.5">
+            <h4 className="font-semibold text-slate-900 dark:text-slate-100">
+              IBus &amp; OpenBangla (Ubuntu / Mint)
+            </h4>
+            <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
+              Works directly with <code className="font-mono-tabular">ibus-avro</code>, <code className="font-mono-tabular">ibus-m17n</code> (Probhat / National Jatiya / UniJoy), and <strong>OpenBangla Keyboard</strong> via standard DOM IME composition events.
+            </p>
+          </div>
+
+          <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/50 p-4 space-y-1.5">
+            <h4 className="font-semibold text-slate-900 dark:text-slate-100">
+              Fcitx5 &amp; Native XKB Layouts
+            </h4>
+            <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
+              Compatible with <code className="font-mono-tabular">fcitx5-m17n</code>, <code className="font-mono-tabular">fcitx5-openbangla</code>, and built-in X11/Wayland <code className="font-mono-tabular">bn(probhat)</code> and <code className="font-mono-tabular">bn</code> system keyboard layouts.
+            </p>
+          </div>
+
+          <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/50 p-4 space-y-1.5">
+            <h4 className="font-semibold text-slate-900 dark:text-slate-100">
+              Compatibility &amp; Licensing Scope
+            </h4>
+            <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
+              Built-in engines are independent clean-room Unicode implementations designed for offline typing practice. They do not bundle proprietary Bijoy ANSI fonts or claim 100% dictionary parity with desktop Avro Keyboard or Bijoy Bayanno.
+            </p>
+          </div>
+        </div>
+      </div>
     </div>
   );
 };
